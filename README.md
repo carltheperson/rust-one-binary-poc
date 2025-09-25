@@ -1,5 +1,9 @@
 # Rust-one-binary-POC
 
+This is the reference code for [this blog post](https://carlriis.com/posts/rust-one-binary/), where I describe packing multiple services into one Rust binary.
+
+![](./screenshot.png)
+
 ## Building the frontend
 
 ```bash
