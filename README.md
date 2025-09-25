@@ -4,9 +4,11 @@
 
 ```bash
 # In frontend/
-npm i
+npm install
 npm run build
 ```
+
+Note: My special [`svelte.config.js`](./frontend/svelte.config.js) and [`vite.config.ts`](./frontend/vite.config.ts) files to have the static stuff work well.
 
 ## Testing SSL using `pebble`
 
