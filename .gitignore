@@ -1,2 +1,5 @@
 /target
 data
+pebble-root.pem
+pebble-root.crt
+pebble.minica.pem

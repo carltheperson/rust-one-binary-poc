@@ -6,8 +6,17 @@ use axum::{
     response::{Html, IntoResponse},
     routing::get,
 };
+use axum_server::bind;
 use rust_embed::Embed;
-use std::sync::Arc;
+use rustls_acme::tower::TowerHttp01ChallengeService;
+use rustls_acme::{AcmeConfig, caches::DirCache};
+use rustls_acme::{UseChallenge::Http01, futures_rustls::rustls};
+use std::{
+    net::{Ipv6Addr, SocketAddr},
+    sync::Arc,
+};
+use tokio::try_join;
+use tokio_stream::StreamExt;
 
 mod db;
 use crate::db::{ensure_item, get_item, open_db};
@@ -30,15 +39,60 @@ async fn main() {
     // seed a few mock items
     seed_mock_items(&db);
 
+    let root_cert = include_bytes!("../pebble.minica.pem");
+    let mut root_store = rustls::RootCertStore::empty();
+    let cert = rustls_pemfile::certs(&mut root_cert.as_slice())
+        .next()
+        .expect("Failed to parse certificate")
+        .expect("No certificate found");
+    root_store
+        .add(cert)
+        .expect("Failed to add certificate to root store");
+    let client_config = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+
+    let mut acme_state = AcmeConfig::new(vec!["app.test".to_string()])
+        .cache_option(Some(DirCache::new("./data/acme")))
+        .directory("https://localhost:14000/dir")
+        .client_tls_config(Arc::new(client_config))
+        .challenge_type(Http01)
+        .state();
+
+    let acceptor = acme_state.axum_acceptor(acme_state.default_rustls_config());
+    let acme_challenge_tower_service: TowerHttp01ChallengeService =
+        acme_state.http01_challenge_tower_service();
+
+    tokio::spawn(async move {
+        loop {
+            match acme_state.next().await.unwrap() {
+                Ok(ok) => println!("event: {:?}", ok),
+                Err(err) => println!("error: {:?}", err),
+            }
+        }
+    });
+
     let state = AppState { db: Arc::new(db) };
 
     let app = Router::new()
         .route("/api/items", get(list_items))
         .route("/api/items/{id}", get(single_item))
         .with_state(state)
+        .route_service(
+            "/.well-known/acme-challenge/{challenge_token}",
+            acme_challenge_tower_service,
+        )
         .fallback(static_handler);
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+
+    let http_addr = SocketAddr::from((Ipv6Addr::UNSPECIFIED, 80));
+    let https_addr = SocketAddr::from((Ipv6Addr::UNSPECIFIED, 443));
+
+    let http_future = bind(http_addr).serve(app.clone().into_make_service());
+    let https_future = bind(https_addr)
+        .acceptor(acceptor)
+        .serve(app.into_make_service());
+
+    try_join!(https_future, http_future).unwrap();
 }
 
 async fn static_handler(uri: Uri, headers: axum::http::HeaderMap) -> impl IntoResponse {
